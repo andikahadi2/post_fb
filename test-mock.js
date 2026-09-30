@@ -9,6 +9,7 @@ function routeOf(url) {
   if (url.includes("/chat/completions")) return "ai";
   if (url.includes("/download")) return "download";
   if (url.includes("/photos/random")) return `unsplash:${new URL(url).searchParams.get("query")}`;
+  if (url.includes("/debug_token")) return "debug";
   if (url.includes("graph.facebook.com")) return "fb";
   if (url.includes("api.telegram.org")) return "telegram";
   return "unknown";

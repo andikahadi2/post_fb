@@ -4,8 +4,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { parseHeadlines } from "./topics.js";
-import { fallbackCaption, parseAiReply } from "./post.js";
+import { parseHeadlines, parseItems } from "./topics.js";
+import { nextRun, parseLog } from "./dashboard.js";
+import { catchupDue, fallbackCaption, parseAiReply } from "./post.js";
 
 let passed = 0;
 function check(name, fn) {
@@ -35,6 +36,21 @@ check("parseHeadlines: domain media di dalam judul ikut dibuang", () => {
   assert.deepStrictEqual(parseHeadlines(xml), ["Velg Mobil 2026: Tips Memilih"]);
 });
 
+check("parseItems: link artikel ikut diambil & di-decode", () => {
+  const xml = `<item><title>Judul - Kompas</title><link>https://n.test/a?x=1&amp;y=2</link><source url="u">Kompas</source></item>`;
+  assert.deepStrictEqual(parseItems(xml), [{ title: "Judul", link: "https://n.test/a?x=1&y=2" }]);
+});
+
+check("catchupDue: hanya kalau slot hari ini lewat & belum ada posting sesudahnya", () => {
+  const at = (h, m = 0) => new Date(2026, 0, 5, h, m);
+  const post = (h) => [{ date: at(h).toISOString() }];
+  assert.strictEqual(catchupDue([], at(18, 59), 19), false); // belum waktunya
+  assert.strictEqual(catchupDue([], at(20), 19), true); // terlewat, belum pernah posting
+  assert.strictEqual(catchupDue(post(19), at(20), 19), false); // sudah posting di slot ini
+  assert.strictEqual(catchupDue(post(8), at(20), 19), true); // posting lama sebelum slot
+  assert.strictEqual(catchupDue([{ date: new Date(2026, 0, 4, 19, 5).toISOString() }], at(20), 19), true); // kemarin
+});
+
 check("parseAiReply: JSON dalam code block + keyword array", () => {
   const raw = "```json\n{\"caption\": \" Halo \", \"imageKeywords\": [\"electric SUV\", \"charging station\"]}\n```";
   assert.deepStrictEqual(parseAiReply(raw), { caption: "Halo", imageKeywords: "electric SUV, charging station" });
@@ -48,6 +64,20 @@ check("parseAiReply: menolak balasan tanpa JSON / field kosong", () => {
   assert.throws(() => parseAiReply("maaf saya tidak bisa"), /tidak berisi JSON/);
   assert.throws(() => parseAiReply('{"caption":"A"}'), /imageKeywords/);
   assert.throws(() => parseAiReply('{"caption":"","imageKeywords":"car"}'), /caption/);
+});
+
+check("parseLog: hasil run terakhir menang, tail dibatasi", () => {
+  const log = "=== a ===\nPosted! post_id: 1\n=== b ===\nGagal posting: Token expired\n";
+  assert.deepStrictEqual(parseLog(log).lastRun, { ok: false, message: "Token expired" });
+  assert.strictEqual(parseLog("Posted! x\n").lastRun.ok, true);
+  assert.strictEqual(parseLog("").lastRun, null);
+  assert.strictEqual(parseLog("x\n".repeat(200)).tail.length, 60);
+});
+
+check("nextRun: jadwal 19:00 hari ini, lompat ke besok setelah lewat", () => {
+  assert.strictEqual(new Date(nextRun(new Date(2026, 0, 5, 7, 0))).getHours(), 19);
+  const d = new Date(nextRun(new Date(2026, 0, 5, 20, 0)));
+  assert.deepStrictEqual([d.getDate(), d.getHours()], [6, 19]);
 });
 
 // --- End-to-end: jalankan post.js sungguhan dengan fetch palsu ---
@@ -90,30 +120,31 @@ const photo = (id, name) => ({
 });
 const aiReply = (content) => ({ body: { choices: [{ message: { content } }] } });
 
-const RSS = { body: "<rss><channel><item><title>Berita A - Kompas</title></item><item><title>Berita B - Detik</title></item></channel></rss>" };
+const RSS = { body: "<rss><channel><item><title>Berita A - Kompas</title><link>https://n.test/a</link></item><item><title>Berita B - Detik</title><link>https://n.test/b</link></item></channel></rss>" };
 const AI_OK = aiReply('```json\n{"caption":"Halo otomotif","imageKeywords":["electric SUV","charging station"]}\n```');
 const base = {
   rss: RSS,
   ai: AI_OK,
-  "unsplash:electric SUV, charging station": { status: 404, body: '{"errors":["No photos found."]}' },
   "unsplash:electric SUV": { body: [photo("p1", "Ann")] },
+  "unsplash:charging station": { status: 404, body: '{"errors":["No photos found."]}' },
   "unsplash:car automotive": { body: [photo("g1", "Generik")] },
   download: { body: "{}" },
+  debug: { body: { data: { is_valid: true, expires_at: 0 } } },
   fb: { body: { id: "photo1", post_id: "123_1" } },
 };
 
 try {
-  check("e2e: posting sukses, fallback ke keyword pertama, kredit foto, history tersimpan", () => {
+  check("e2e: posting sukses, keyword dicoba satu per satu, link sumber & kredit foto, history tersimpan", () => {
     const r = run(base);
     assert.strictEqual(r.code, 0, r.out);
     assert.deepStrictEqual(r.routes, [
-      "rss", "ai", "unsplash:electric SUV, charging station", "unsplash:electric SUV", "fb", "download",
+      "debug", "rss", "ai", "unsplash:electric SUV", "fb", "download",
     ]);
     const fb = r.calls.find((c) => c.route === "fb");
     assert.match(fb.url, /graph\.facebook\.com\/v26\.0\/123\/photos$/);
     const params = new URLSearchParams(fb.body);
     assert.strictEqual(params.get("url"), "https://img.test/p1.jpg");
-    assert.strictEqual(params.get("caption"), "Halo otomotif\n\n📷 Foto: Ann / Unsplash");
+    assert.match(params.get("caption"), /^Halo otomotif\n\n🔗 Sumber: https:\/\/n\.test\/[ab]\n📷 Foto: Ann \/ Unsplash$/);
     assert.strictEqual(params.get("access_token"), "t");
     const h = history();
     assert.strictEqual(h.length, 1);
@@ -173,7 +204,7 @@ try {
   });
 
   check("e2e: Unsplash 5xx sementara -> dicoba ulang", () => {
-    const r = run({ ...base, "unsplash:electric SUV, charging station": [{ status: 503, body: "x" }, { body: [photo("p9", "Dedi")] }] }, { args: ["--dry"] });
+    const r = run({ ...base, "unsplash:electric SUV": [{ status: 503, body: "x" }, { body: [photo("p9", "Dedi")] }] }, { args: ["--dry"] });
     assert.strictEqual(r.code, 0, r.out);
     assert.match(r.out, /Foto: Dedi/);
   });
@@ -186,6 +217,24 @@ try {
     assert.strictEqual(r.code, 1);
     const tg = r.calls.find((c) => c.route === "telegram");
     assert.match(new URLSearchParams(tg.body).get("text"), /Token expired/);
+  });
+
+  check("e2e: --catchup tanpa jadwal terlewat -> tidak menghubungi siapa pun", () => {
+    const r = run(base, { args: ["--catchup"], env: { POST_HOUR: "0" } });
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /tidak ada jadwal yang terlewat/);
+    assert.strictEqual(r.calls.length, 0);
+  });
+
+  check("e2e: token FB hampir kedaluwarsa -> peringatan Telegram, posting tetap jalan", () => {
+    const soon = Math.floor(Date.now() / 1000) + 3600;
+    const r = run(
+      { ...base, "unsplash:electric SUV": { body: [photo("p7", "Fani")] }, debug: { body: { data: { is_valid: true, expires_at: soon } } }, telegram: { body: { ok: true } } },
+      { env: { TELEGRAM_BOT_TOKEN: "b", TELEGRAM_CHAT_ID: "c" } },
+    );
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(new URLSearchParams(r.calls.find((c) => c.route === "telegram").body).get("text"), /Token Facebook kedaluwarsa/);
+    assert.ok(r.routes.includes("fb"));
   });
 
   check("fallbackCaption: berisi topik & hashtag", () => {
@@ -205,7 +254,7 @@ try {
     assert.strictEqual(r.code, 1);
     assert.match(r.out, /Invalid OAuth access token/);
     assert.ok(!r.routes.includes("download"));
-    assert.strictEqual(history().length, 2);
+    assert.strictEqual(history().length, 3);
   });
 
   check("e2e: Facebook membalas HTML (bukan JSON) -> pesan error tetap terbaca", () => {

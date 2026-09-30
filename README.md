@@ -20,15 +20,26 @@ Butuh Node.js 20+.
 3. Ambil page token: `GET /me/accounts?access_token=LONG_LIVED_USER_TOKEN`. Page token dari user token long-lived **tidak kedaluwarsa**. Pakai `access_token` dan `id` halaman itu untuk `.env`.
 
 ## Jadwal
-- Linux/macOS: `./schedule.sh` (cron 08:00 & 19:00); hapus dengan `./schedule.sh --remove`.
+- Linux/macOS: `./schedule.sh` (cron setiap hari 19:00, plus catch-up 20:05–23:05 yang hanya jalan kalau posting 19:00 terlewat/gagal); hapus dengan `./schedule.sh --remove`.
 - Windows: `powershell -ExecutionPolicy Bypass -File schedule.ps1`.
 
 Log ada di `post.log`, riwayat topik/foto di `history.json`.
 
+## Token permanen dengan satu perintah
+Isi `FB_APP_ID` dan `FB_APP_SECRET` di `.env` (Meta for Developers → App → Settings → Basic), ambil user token baru dari Graph API Explorer, lalu:
+`npm run fb-token -- <USER_TOKEN>` — menukar ke token Page permanen dan menulisnya ke `.env`.
+Setiap posting, aplikasi mengecek masa berlaku token dan mengirim peringatan Telegram kalau kurang dari 3 hari.
+
 ## Ketahanan
 - Request Unsplash dan 9Router diulang otomatis kalau error sementara (timeout, 5xx, 429).
 - Kalau AI gagal total, dipakai caption cadangan sederhana supaya jadwal tidak bolong.
+- Caption memuat link berita sumber; keyword gambar dicoba satu per satu ke Unsplash.
 - Kalau posting gagal, notifikasi Telegram dikirim (jika dikonfigurasi). Facebook tidak diulang otomatis agar tidak terjadi posting ganda.
 
 ## Test
 `npm test` (unit parser + end-to-end dengan fetch palsu).
+
+## Dashboard pemantauan
+`npm run dashboard` lalu buka http://127.0.0.1:3000 (ganti port lewat `DASHBOARD_PORT`).
+Menampilkan status run terakhir (sukses/gagal), total & posting hari ini, jadwal berikutnya, riwayat posting dengan link ke Facebook, status konfigurasi, dan log terbaru; refresh otomatis tiap 30 detik.
+Read-only dan hanya listen di localhost (tanpa autentikasi, jangan diekspos ke internet). Jam jadwal di dashboard (`SCHEDULE_HOURS` di `dashboard.js`) harus sama dengan jadwal cron.

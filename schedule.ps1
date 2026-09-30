@@ -3,7 +3,7 @@
 # Hapus jadwal: Unregister-ScheduledTask -TaskName "AI Post FB Otomotif" -Confirm:$false
 
 $TaskName = "AI Post FB Otomotif"
-$Times = @("08:00", "19:00")
+$Times = @("19:00")
 
 $Dir = $PSScriptRoot
 $Node = (Get-Command node -ErrorAction Stop).Source

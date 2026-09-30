@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Post FB · Monitor</title>
+<style>
+  /* Token bergaya shadcn/ui (zinc) */
+  :root {
+    --background: 0 0% 100%; --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%; --muted: 240 4.8% 95.9%; --muted-foreground: 240 3.8% 42%;
+    --border: 240 5.9% 90%; --primary: 240 5.9% 10%; --primary-foreground: 0 0% 98%;
+    --success: 142 72% 29%; --success-bg: 138 76% 96%;
+    --danger: 0 72% 42%; --danger-bg: 0 86% 97%;
+    --warn: 32 95% 34%; --warn-bg: 48 96% 94%;
+    --ring: 240 5% 34%; --radius: .5rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --background: 240 10% 3.9%; --foreground: 0 0% 98%;
+      --card: 240 10% 6%; --muted: 240 3.7% 15.9%; --muted-foreground: 240 5% 65%;
+      --border: 240 3.7% 17%; --primary: 0 0% 98%; --primary-foreground: 240 5.9% 10%;
+      --success: 142 70% 55%; --success-bg: 142 50% 10%;
+      --danger: 0 90% 70%; --danger-bg: 0 50% 12%;
+      --warn: 43 96% 60%; --warn-bg: 35 60% 10%;
+      --ring: 240 5% 65%;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: hsl(var(--background)); color: hsl(var(--foreground));
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
+  }
+  :focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -.02em; }
+  .sub { color: hsl(var(--muted-foreground)); font-size: 13px; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  button {
+    font: inherit; font-weight: 500; cursor: pointer; min-height: 36px; padding: 0 14px;
+    border-radius: calc(var(--radius) - 2px); border: 1px solid hsl(var(--border));
+    background: hsl(var(--card)); color: hsl(var(--foreground));
+  }
+  button:hover { background: hsl(var(--muted)); }
+  .card { background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: var(--radius); }
+  .card h2 { font-size: 14px; font-weight: 600; margin: 0; padding: 16px 16px 0; }
+  .card .body { padding: 12px 16px 16px; }
+  .grid { display: grid; gap: 12px; }
+  .stats { grid-template-columns: repeat(4, 1fr); margin-bottom: 12px; }
+  .stat { padding: 16px; }
+  .stat .label { color: hsl(var(--muted-foreground)); font-size: 13px; }
+  .stat .value { font-size: 24px; font-weight: 700; letter-spacing: -.02em; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .stat .value.sm { font-size: 16px; padding-top: 6px; }
+  .main { grid-template-columns: 2fr 1fr; align-items: start; margin-top: 12px; }
+  .alert { display: flex; gap: 10px; padding: 12px 16px; border-radius: var(--radius); border: 1px solid; margin-bottom: 12px; }
+  .alert b { display: block; }
+  .alert.ok { color: hsl(var(--success)); background: hsl(var(--success-bg)); border-color: hsl(var(--success) / .3); }
+  .alert.bad { color: hsl(var(--danger)); background: hsl(var(--danger-bg)); border-color: hsl(var(--danger) / .3); }
+  .alert.idle { color: hsl(var(--muted-foreground)); background: hsl(var(--muted)); border-color: hsl(var(--border)); }
+  .alert span { color: hsl(var(--foreground)); word-break: break-word; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-weight: 500; color: hsl(var(--muted-foreground)); font-size: 13px; padding: 8px 12px; border-bottom: 1px solid hsl(var(--border)); white-space: nowrap; position: sticky; top: 0; background: hsl(var(--card)); }
+  td { padding: 10px 12px; border-bottom: 1px solid hsl(var(--border)); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  td.topic { min-width: 220px; }
+  td.time { white-space: nowrap; color: hsl(var(--muted-foreground)); }
+  a { color: inherit; text-underline-offset: 3px; }
+  .badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 500; padding: 1px 8px; border-radius: 999px; border: 1px solid hsl(var(--border)); white-space: nowrap; }
+  .badge.ok { color: hsl(var(--success)); background: hsl(var(--success-bg)); border-color: transparent; }
+  .badge.bad { color: hsl(var(--danger)); background: hsl(var(--danger-bg)); border-color: transparent; }
+  .cfg { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .cfg li { display: flex; justify-content: space-between; gap: 8px; align-items: center; font-size: 13px; }
+  .cfg code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+  pre.log { margin: 0; max-height: 320px; overflow: auto; padding: 12px; background: hsl(var(--muted)); border-radius: calc(var(--radius) - 2px); font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+  .side { display: grid; gap: 12px; }
+  .empty { text-align: center; padding: 32px 16px; color: hsl(var(--muted-foreground)); }
+  .skel { height: 1em; border-radius: 4px; background: hsl(var(--muted)); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .45; } }
+  @media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
+  @media (max-width: 860px) { .stats { grid-template-columns: repeat(2, 1fr); } .main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>AI Post FB · Monitor</h1>
+      <div class="sub" id="updated" aria-live="polite">Memuat…</div>
+    </div>
+    <div class="row"><button id="refresh" type="button">Muat ulang</button></div>
+  </header>
+
+  <div id="status" role="status"></div>
+
+  <section class="grid stats" aria-label="Ringkasan">
+    <div class="card stat"><div class="label">Total posting</div><div class="value" id="total"><div class="skel" style="width:40px"></div></div></div>
+    <div class="card stat"><div class="label">Hari ini</div><div class="value" id="today"><div class="skel" style="width:40px"></div></div></div>
+    <div class="card stat"><div class="label">Posting terakhir</div><div class="value sm" id="last"><div class="skel" style="width:110px"></div></div></div>
+    <div class="card stat"><div class="label">Jadwal berikutnya</div><div class="value sm" id="next"><div class="skel" style="width:110px"></div></div></div>
+  </section>
+
+  <div class="grid main">
+    <section class="card" aria-labelledby="h-hist">
+      <h2 id="h-hist">Riwayat posting</h2>
+      <div class="body table-wrap" id="history"><div class="skel"></div></div>
+    </section>
+    <div class="side">
+      <section class="card" aria-labelledby="h-cfg">
+        <h2 id="h-cfg">Konfigurasi</h2>
+        <div class="body"><ul class="cfg" id="config"></ul></div>
+      </section>
+      <section class="card" aria-labelledby="h-log">
+        <h2 id="h-log">Log terbaru</h2>
+        <div class="body"><pre class="log" id="log" tabindex="0"></pre></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (iso) => iso ? new Date(iso).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" }) : "—";
+const REQUIRED = ["UNSPLASH_ACCESS_KEY", "NINE_ROUTER_API_KEY", "FB_PAGE_ID", "FB_PAGE_ACCESS_TOKEN"];
+
+// Semua data (judul berita dari RSS, log) dimasukkan lewat textContent, tidak pernah innerHTML.
+function el(tag, props = {}, ...kids) {
+  const e = Object.assign(document.createElement(tag), props);
+  e.append(...kids);
+  return e;
+}
+const badge = (ok, text) => el("span", { className: `badge ${ok ? "ok" : "bad"}` }, (ok ? "✓ " : "✕ ") + text);
+
+function renderStatus(s) {
+  const box = $("status");
+  const r = s.lastRun;
+  const [cls, title, msg] = !r
+    ? ["idle", "Belum ada data run", "Belum ada hasil posting di post.log."]
+    : r.ok
+      ? ["ok", "Run terakhir berhasil", `Posting terakhir: ${fmt(s.lastPost)}`]
+      : ["bad", "Run terakhir GAGAL", r.message];
+  box.replaceChildren(el("div", { className: `alert ${cls}` }, el("div", {}, el("b", {}, title), el("span", {}, msg))));
+}
+
+function renderHistory(list) {
+  if (!list.length) return $("history").replaceChildren(el("div", { className: "empty" }, "Belum ada posting."));
+  const rows = list.map((h) => el("tr", {},
+    el("td", { className: "time" }, fmt(h.date)),
+    el("td", { className: "topic" }, h.topic),
+    el("td", {}, h.postId
+      ? el("a", { href: `https://www.facebook.com/${encodeURIComponent(h.postId)}`, target: "_blank", rel: "noopener noreferrer" }, "Buka")
+      : "—")));
+  $("history").replaceChildren(el("table", {},
+    el("thead", {}, el("tr", {}, ...["Waktu", "Topik", "Post"].map((t) => el("th", { scope: "col" }, t)))),
+    el("tbody", {}, ...rows)));
+}
+
+function render(s) {
+  renderStatus(s);
+  $("total").textContent = s.total;
+  $("today").textContent = s.today;
+  $("last").textContent = fmt(s.lastPost);
+  $("next").textContent = fmt(s.nextRun);
+  renderHistory(s.history);
+  $("config").replaceChildren(...Object.entries(s.config).map(([k, ok]) =>
+    el("li", {}, el("code", {}, k), ok ? badge(true, "terisi") : el("span", { className: "badge" + (REQUIRED.includes(k) ? " bad" : "") }, REQUIRED.includes(k) ? "✕ kosong" : "– opsional"))));
+  const log = $("log");
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 8;
+  log.textContent = s.log.length ? s.log.join("\n") : "post.log kosong.";
+  if (atBottom) log.scrollTop = log.scrollHeight;
+  $("updated").textContent = `Diperbarui ${fmt(s.now)} · otomatis tiap 30 detik`;
+}
+
+async function load() {
+  try {
+    const res = await fetch("/api/status");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    render(await res.json());
+  } catch (err) {
+    $("status").replaceChildren(el("div", { className: "alert bad" }, el("div", {}, el("b", {}, "Gagal memuat data"), el("span", {}, `${err.message}. Pastikan dashboard.js masih berjalan.`))));
+  }
+}
+$("refresh").addEventListener("click", load);
+load();
+setInterval(load, 30_000);
+</script>
+</body>
+</html>

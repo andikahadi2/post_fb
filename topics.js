@@ -29,29 +29,33 @@ const decode = (s) => s.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/
 
 // Judul Google News berbentuk "Judul - Nama Media"; nama media bisa mengandung " - " juga,
 // jadi dipotong pakai isi <source> kalau ada.
-export function parseHeadlines(xml) {
+export function parseItems(xml) {
   return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)]
     .map(([, item]) => {
       const title = decode(item.match(/<title>([\s\S]*?)<\/title>/)?.[1] ?? "");
       const source = decode(item.match(/<source[^>]*>([\s\S]*?)<\/source>/)?.[1] ?? "");
+      const link = decode(item.match(/<link>([\s\S]*?)<\/link>/)?.[1] ?? "").trim();
       const suffix = ` - ${source}`;
       const stripped = source && title.endsWith(suffix) ? title.slice(0, -suffix.length) : title.replace(/\s+-\s+[^-]+$/, "");
       // Sebagian media menaruh domainnya sendiri di judul: "Judul - paltv.disway.id - Disway".
-      return stripped.replace(/\s+-\s+\S+\.[a-z]{2,}$/i, "").trim();
+      return { title: stripped.replace(/\s+-\s+\S+\.[a-z]{2,}$/i, "").trim(), link };
     })
-    .filter(Boolean);
+    .filter((i) => i.title);
 }
+
+export const parseHeadlines = (xml) => parseItems(xml).map((i) => i.title);
 
 // ponytail: ambil acak dari 10 berita teratas yang belum pernah dipakai; fallback ke daftar statis kalau RSS gagal/habis
 export async function trendingTopic(usedTopics = new Set()) {
   try {
     const res = await fetch(NEWS_RSS);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const headlines = parseHeadlines(await res.text())
-      .filter((h) => !usedTopics.has(h))
+    const items = parseItems(await res.text())
+      .filter((i) => !usedTopics.has(i.title))
       .slice(0, 10);
-    if (!headlines.length) throw new Error("tidak ada berita baru");
-    return { topic: pick(headlines), source: "berita" };
+    if (!items.length) throw new Error("tidak ada berita baru");
+    const { title, link } = pick(items);
+    return { topic: title, source: "berita", link };
   } catch (err) {
     console.warn(`RSS berita gagal (${err.message}), pakai topik statis.`);
     const fresh = TOPICS.filter((t) => !usedTopics.has(t));

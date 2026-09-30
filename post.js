@@ -3,6 +3,7 @@ import { readFile, rename, writeFile } from "node:fs/promises";
 import { trendingTopic } from "./topics.js";
 
 const DRY_RUN = process.argv.includes("--dry");
+const CATCHUP = process.argv.includes("--catchup");
 const HISTORY_FILE = "history.json";
 const HISTORY_LIMIT = 300;
 const GRAPH_API = "https://graph.facebook.com/v26.0";
@@ -18,6 +19,7 @@ const {
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_CHAT_ID,
   RETRY_DELAY_MS = "2000",
+  POST_HOUR = "19",
 } = process.env;
 
 function requireEnv() {
@@ -52,16 +54,41 @@ async function request(name, url, { timeoutMs = 30_000, retries = 0, ...options 
   }
 }
 
-// Kabari lewat Telegram kalau posting gagal; opsional, dilewati kalau belum dikonfigurasi.
-async function notifyFailure(message) {
+// Kabari lewat Telegram (gagal posting / token hampir habis); opsional, dilewati kalau belum dikonfigurasi.
+async function notify(text) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
   try {
     await request("Telegram", `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: "POST",
-      body: new URLSearchParams({ chat_id: TELEGRAM_CHAT_ID, text: `⚠️ Auto-post FB gagal:\n${message}` }),
+      body: new URLSearchParams({ chat_id: TELEGRAM_CHAT_ID, text }),
     });
   } catch (err) {
     console.warn(`Notifikasi Telegram gagal: ${err.message}`);
+  }
+}
+
+// Slot hari ini (jam POST_HOUR) terlewat dan belum ada posting sesudahnya -> perlu dikejar.
+export function catchupDue(history, now = new Date(), hour = Number(POST_HOUR)) {
+  const slot = new Date(now);
+  slot.setHours(hour, 0, 0, 0);
+  const last = history.at(-1)?.date;
+  return now >= slot && (!last || new Date(last) < slot);
+}
+
+// Token Page dari token pengguna jangka pendek bisa kedaluwarsa dalam hitungan jam; kabari sebelum job gagal.
+async function checkFacebookToken() {
+  try {
+    const url = new URL(`${GRAPH_API}/debug_token`);
+    url.searchParams.set("input_token", FB_PAGE_ACCESS_TOKEN);
+    url.searchParams.set("access_token", FB_PAGE_ACCESS_TOKEN);
+    const data = (await (await request("Facebook token", url, { retries: 1 })).json()).data;
+    if (data?.expires_at && data.expires_at * 1000 - Date.now() < 3 * 86_400_000) {
+      const when = new Date(data.expires_at * 1000).toLocaleString("id-ID");
+      console.warn(`Token Facebook kedaluwarsa ${when}.`);
+      await notify(`⚠️ Token Facebook kedaluwarsa ${when}. Buat token permanen: npm run fb-token -- <user_token>`);
+    }
+  } catch (err) {
+    console.warn(`Cek token Facebook dilewati: ${err.message}`);
   }
 }
 
@@ -83,8 +110,9 @@ async function saveHistory(history, entry) {
 }
 
 async function findImage(imageKeywords, usedPhotoIds) {
-  const firstPhrase = imageKeywords.split(",")[0].trim();
-  const queries = [...new Set([imageKeywords, firstPhrase, FALLBACK_IMAGE_QUERY])];
+  // Unsplash mencocokkan seluruh query sekaligus, jadi daftar keyword digabung hampir selalu kosong: coba satu per satu.
+  const phrases = imageKeywords.split(",").map((k) => k.trim()).filter(Boolean).slice(0, 3);
+  const queries = [...new Set([...phrases, FALLBACK_IMAGE_QUERY])];
 
   for (const query of queries) {
     const url = new URL("https://api.unsplash.com/photos/random");
@@ -161,8 +189,9 @@ async function generateCaptionAndKeywords(topic) {
     `tambahkan 3-5 hashtag relevan di akhir. Jangan mengarang angka, harga, atau fakta spesifik yang tidak ada di judul; ` +
     `kalau perlu, fokus ke opini, konteks umum, atau tips yang berkaitan.\n\n` +
     `Lalu buat juga 2-4 keyword pencarian gambar dalam Bahasa Inggris yang paling relevan dengan isi caption itu, ` +
-    `dipisah koma, yang paling penting di depan ` +
-    `(untuk dicari di Unsplash, jadi keyword harus konkret/visual, misal "electric SUV, charging station" bukan "teknologi masa depan").\n\n` +
+    `dipisah koma, yang paling penting di depan. Setiap keyword pendek (1-3 kata), sederhana, dan konkret/visual, ` +
+    `mulai dari merek atau jenis kendaraan yang umum ada di foto stok, misal "Nissan car, electric SUV, car showroom" ` +
+    `bukan "teknologi masa depan" atau frasa panjang yang terlalu spesifik.\n\n` +
     `Balas HANYA dalam format JSON persis seperti ini, tanpa markdown code block, tanpa teks lain:\n` +
     `{"caption": "...", "imageKeywords": "..."}`;
 
@@ -220,10 +249,15 @@ async function main() {
   if (DRY_RUN) console.log("=== DRY RUN: tidak akan posting ke Facebook ===");
 
   const history = await loadHistory();
+  if (CATCHUP && !catchupDue(history)) {
+    console.log("Catch-up: tidak ada jadwal yang terlewat, lewati.");
+    return;
+  }
+  if (!DRY_RUN) await checkFacebookToken();
   const usedTopics = new Set(history.map((h) => h.topic));
   const usedPhotoIds = new Set(history.map((h) => h.photoId));
 
-  const { topic, source } = await trendingTopic(usedTopics);
+  const { topic, source, link } = await trendingTopic(usedTopics);
   console.log(`[1/4] Topik (${source}): ${topic}`);
 
   let generated;
@@ -239,7 +273,8 @@ async function main() {
   const image = await findImage(imageKeywords, usedPhotoIds);
   console.log(`[3/4] Gambar: ${image.imageUrl} (by ${image.photographer})`);
 
-  const fullCaption = `${caption}\n\n📷 Foto: ${image.photographer} / Unsplash`;
+  const sourceLine = link ? `🔗 Sumber: ${link}\n` : "";
+  const fullCaption = `${caption}\n\n${sourceLine}📷 Foto: ${image.photographer} / Unsplash`;
   console.log(`\n${fullCaption}\n`);
 
   if (DRY_RUN) {
@@ -263,7 +298,7 @@ async function main() {
 if (import.meta.main ?? process.argv[1]?.endsWith("post.js")) {
   main().catch(async (err) => {
     console.error("Gagal posting:", err.message);
-    await notifyFailure(err.message);
+    await notify(`⚠️ Auto-post FB gagal:\n${err.message}`);
     // process.exit() di Windows bisa crash (UV_HANDLE_CLOSING) saat socket fetch masih ditutup.
     process.exitCode = 1;
   });

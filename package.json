@@ -6,6 +6,8 @@
   "scripts": {
     "post": "node post.js",
     "dry": "node post.js --dry",
+    "dashboard": "node dashboard.js",
+    "fb-token": "node fb-token.js",
     "test": "node test.js"
   },
   "dependencies": {
