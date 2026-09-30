@@ -36,9 +36,13 @@ check("parseHeadlines: domain media di dalam judul ikut dibuang", () => {
   assert.deepStrictEqual(parseHeadlines(xml), ["Velg Mobil 2026: Tips Memilih"]);
 });
 
-check("parseItems: link artikel ikut diambil & di-decode", () => {
-  const xml = `<item><title>Judul - Kompas</title><link>https://n.test/a?x=1&amp;y=2</link><source url="u">Kompas</source></item>`;
-  assert.deepStrictEqual(parseItems(xml), [{ title: "Judul", link: "https://n.test/a?x=1&y=2" }]);
+check("parseItems: nama media & domain sumber ikut diambil (domain kosong kalau url tidak valid)", () => {
+  const xml = `<item><title>Judul - Kompas</title><source url="https://otomotif.kompas.com">Kompas</source></item>` +
+    `<item><title>Lain - X</title><source url="bukan-url">X</source></item>`;
+  assert.deepStrictEqual(parseItems(xml), [
+    { title: "Judul", sourceName: "Kompas", sourceHost: "otomotif.kompas.com" },
+    { title: "Lain", sourceName: "X", sourceHost: "" },
+  ]);
 });
 
 check("catchupDue: hanya kalau slot hari ini lewat & belum ada posting sesudahnya", () => {
@@ -120,7 +124,7 @@ const photo = (id, name) => ({
 });
 const aiReply = (content) => ({ body: { choices: [{ message: { content } }] } });
 
-const RSS = { body: "<rss><channel><item><title>Berita A - Kompas</title><link>https://n.test/a</link></item><item><title>Berita B - Detik</title><link>https://n.test/b</link></item></channel></rss>" };
+const RSS = { body: "<rss><channel><item><title>Berita A - Kompas</title><source url=\"https://a.test\">Kompas</source></item><item><title>Berita B - Detik</title><source url=\"https://b.test\">Detik</source></item></channel></rss>" };
 const AI_OK = aiReply('```json\n{"caption":"Halo otomotif","imageKeywords":["electric SUV","charging station"]}\n```');
 const base = {
   rss: RSS,
@@ -134,7 +138,7 @@ const base = {
 };
 
 try {
-  check("e2e: posting sukses, keyword dicoba satu per satu, link sumber & kredit foto, history tersimpan", () => {
+  check("e2e: posting sukses, keyword dicoba satu per satu, sumber berita & kredit foto, history tersimpan", () => {
     const r = run(base);
     assert.strictEqual(r.code, 0, r.out);
     assert.deepStrictEqual(r.routes, [
@@ -144,7 +148,7 @@ try {
     assert.match(fb.url, /graph\.facebook\.com\/v26\.0\/123\/photos$/);
     const params = new URLSearchParams(fb.body);
     assert.strictEqual(params.get("url"), "https://img.test/p1.jpg");
-    assert.match(params.get("caption"), /^Halo otomotif\n\n🔗 Sumber: https:\/\/n\.test\/[ab]\n📷 Foto: Ann \/ Unsplash$/);
+    assert.match(params.get("caption"), /^Halo otomotif\n\n📰 Sumber: (Kompas · a\.test|Detik · b\.test)\n📷 Foto: Ann \/ Unsplash$/);
     assert.strictEqual(params.get("access_token"), "t");
     const h = history();
     assert.strictEqual(h.length, 1);

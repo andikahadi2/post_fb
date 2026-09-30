@@ -33,7 +33,7 @@ Setiap posting, aplikasi mengecek masa berlaku token dan mengirim peringatan Tel
 ## Ketahanan
 - Request Unsplash dan 9Router diulang otomatis kalau error sementara (timeout, 5xx, 429).
 - Kalau AI gagal total, dipakai caption cadangan sederhana supaya jadwal tidak bolong.
-- Caption memuat link berita sumber; keyword gambar dicoba satu per satu ke Unsplash.
+- Caption memuat nama media + domain sumber berita (link Google News terenkripsi & panjang, jadi tidak dipakai); keyword gambar dicoba satu per satu ke Unsplash.
 - Kalau posting gagal, notifikasi Telegram dikirim (jika dikonfigurasi). Facebook tidak diulang otomatis agar tidak terjadi posting ganda.
 
 ## Test

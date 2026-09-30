@@ -257,7 +257,7 @@ async function main() {
   const usedTopics = new Set(history.map((h) => h.topic));
   const usedPhotoIds = new Set(history.map((h) => h.photoId));
 
-  const { topic, source, link } = await trendingTopic(usedTopics);
+  const { topic, source, credit } = await trendingTopic(usedTopics);
   console.log(`[1/4] Topik (${source}): ${topic}`);
 
   let generated;
@@ -273,7 +273,7 @@ async function main() {
   const image = await findImage(imageKeywords, usedPhotoIds);
   console.log(`[3/4] Gambar: ${image.imageUrl} (by ${image.photographer})`);
 
-  const sourceLine = link ? `🔗 Sumber: ${link}\n` : "";
+  const sourceLine = credit ? `📰 Sumber: ${credit}\n` : "";
   const fullCaption = `${caption}\n\n${sourceLine}📷 Foto: ${image.photographer} / Unsplash`;
   console.log(`\n${fullCaption}\n`);
 
