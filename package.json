@@ -1,0 +1,14 @@
+{
+  "name": "ai-post-fb",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "post": "node post.js",
+    "dry": "node post.js --dry",
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  }
+}
