@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseHeadlines } from "./topics.js";
-import { parseAiReply } from "./post.js";
+import { fallbackCaption, parseAiReply } from "./post.js";
 
 let passed = 0;
 function check(name, fn) {
@@ -70,6 +70,7 @@ function run(scenario, { args = [], env = {} } = {}) {
       FB_PAGE_ID: "123",
       FB_PAGE_ACCESS_TOKEN: "t",
       ...env,
+      RETRY_DELAY_MS: "0",
       MOCK_SCENARIO: JSON.stringify(scenario),
       MOCK_LOG: LOG,
     },
@@ -157,16 +158,38 @@ try {
     assert.strictEqual(r.routes.filter((x) => x === "ai").length, 2);
   });
 
-  check("e2e: AI tetap rusak setelah 2x -> gagal dengan pesan jelas", () => {
+  check("e2e: AI tetap rusak setelah 2x -> pakai caption cadangan", () => {
     const r = run({ ...base, ai: aiReply("tidak ada json") }, { args: ["--dry"] });
-    assert.strictEqual(r.code, 1);
-    assert.match(r.out, /tidak valid setelah 2x coba/);
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /tidak valid setelah 2x coba.*caption cadangan/s);
+    assert.match(r.out, /Menurut kamu gimana/);
   });
 
-  check("e2e: 9Router mati -> pesan menyuruh menyalakan 9Router", () => {
+  check("e2e: 9Router mati -> dicoba ulang, lalu caption cadangan dengan pesan 9Router", () => {
     const r = run({ ...base, ai: { throw: "ECONNREFUSED" } }, { args: ["--dry"] });
-    assert.strictEqual(r.code, 1);
+    assert.strictEqual(r.code, 0, r.out);
     assert.match(r.out, /pastikan 9Router sudah jalan.*ECONNREFUSED/);
+    assert.strictEqual(r.routes.filter((x) => x === "ai").length, 2);
+  });
+
+  check("e2e: Unsplash 5xx sementara -> dicoba ulang", () => {
+    const r = run({ ...base, "unsplash:electric SUV, charging station": [{ status: 503, body: "x" }, { body: [photo("p9", "Dedi")] }] }, { args: ["--dry"] });
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /Foto: Dedi/);
+  });
+
+  check("e2e: gagal posting -> kirim notifikasi Telegram", () => {
+    const r = run(
+      { ...base, "unsplash:electric SUV": { body: [photo("p8", "Eka")] }, fb: { status: 400, body: { error: { message: "Token expired" } } }, "telegram": { body: { ok: true } } },
+      { env: { TELEGRAM_BOT_TOKEN: "b", TELEGRAM_CHAT_ID: "c" } },
+    );
+    assert.strictEqual(r.code, 1);
+    const tg = r.calls.find((c) => c.route === "telegram");
+    assert.match(new URLSearchParams(tg.body).get("text"), /Token expired/);
+  });
+
+  check("fallbackCaption: berisi topik & hashtag", () => {
+    assert.match(fallbackCaption("Topik X").caption, /^Topik X\n[\s\S]*#otomotif/);
   });
 
   check("e2e: semua pencarian Unsplash kosong -> gagal, 3 query dicoba", () => {

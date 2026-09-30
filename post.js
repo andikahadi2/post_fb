@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { trendingTopic } from "./topics.js";
 
 const DRY_RUN = process.argv.includes("--dry");
@@ -15,6 +15,9 @@ const {
   NINE_ROUTER_MODEL = "gh/gpt-5.4",
   FB_PAGE_ID,
   FB_PAGE_ACCESS_TOKEN,
+  TELEGRAM_BOT_TOKEN,
+  TELEGRAM_CHAT_ID,
+  RETRY_DELAY_MS = "2000",
 } = process.env;
 
 function requireEnv() {
@@ -29,12 +32,36 @@ function requireEnv() {
 }
 
 // Semua request diberi batas waktu supaya jadwal otomatis tidak menggantung selamanya.
-async function request(name, url, { timeoutMs = 30_000, ...options } = {}) {
+// retries hanya untuk request yang aman diulang (jangan dipakai untuk POST ke Facebook: bisa dobel posting).
+async function request(name, url, { timeoutMs = 30_000, retries = 0, ...options } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    let res, failure;
+    try {
+      res = await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
+      if (res.status !== 429 && res.status < 500) return res;
+    } catch (err) {
+      const reason = err.name === "TimeoutError" ? `timeout ${timeoutMs / 1000} detik` : err.cause?.code || err.message;
+      failure = new Error(`${name} tidak bisa dihubungi (${reason})`);
+    }
+    if (attempt >= retries) {
+      if (failure) throw failure;
+      return res;
+    }
+    console.warn(`${name} gagal (${failure ? failure.message : `HTTP ${res.status}`}), coba lagi...`);
+    await new Promise((r) => setTimeout(r, Number(RETRY_DELAY_MS) * (attempt + 1)));
+  }
+}
+
+// Kabari lewat Telegram kalau posting gagal; opsional, dilewati kalau belum dikonfigurasi.
+async function notifyFailure(message) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
   try {
-    return await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
+    await request("Telegram", `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      body: new URLSearchParams({ chat_id: TELEGRAM_CHAT_ID, text: `⚠️ Auto-post FB gagal:\n${message}` }),
+    });
   } catch (err) {
-    const reason = err.name === "TimeoutError" ? `timeout ${timeoutMs / 1000} detik` : err.cause?.code || err.message;
-    throw new Error(`${name} tidak bisa dihubungi (${reason})`);
+    console.warn(`Notifikasi Telegram gagal: ${err.message}`);
   }
 }
 
@@ -50,7 +77,9 @@ async function loadHistory() {
 // ponytail: simpan 300 entri terakhir saja, cukup untuk ~5 bulan posting 2x sehari
 async function saveHistory(history, entry) {
   const next = [...history, entry].slice(-HISTORY_LIMIT);
-  await writeFile(HISTORY_FILE, JSON.stringify(next, null, 2));
+  // Tulis ke file sementara lalu rename, supaya crash di tengah tidak merusak history.
+  await writeFile(`${HISTORY_FILE}.tmp`, JSON.stringify(next, null, 2));
+  await rename(`${HISTORY_FILE}.tmp`, HISTORY_FILE);
 }
 
 async function findImage(imageKeywords, usedPhotoIds) {
@@ -66,6 +95,7 @@ async function findImage(imageKeywords, usedPhotoIds) {
 
     const res = await request("Unsplash", url, {
       headers: { Authorization: `Client-ID ${UNSPLASH_ACCESS_KEY}` },
+      retries: 2,
     });
     // Unsplash membalas 404 kalau keyword tidak menemukan foto apa pun.
     if (res.status === 404) {
@@ -118,6 +148,14 @@ export function parseAiReply(raw) {
   return { caption, imageKeywords };
 }
 
+// Dipakai kalau AI mati/rusak supaya jadwal posting tidak bolong.
+export function fallbackCaption(topic) {
+  return {
+    caption: `${topic}\n\nMenurut kamu gimana? Tulis pendapatmu di komentar 👇\n\n#otomotif #mobil #beritaotomotif`,
+    imageKeywords: FALLBACK_IMAGE_QUERY,
+  };
+}
+
 async function generateCaptionAndKeywords(topic) {
   const prompt = `Buatkan caption Facebook berdasarkan topik/judul berita otomotif ini: "${topic}". Maksimal 120 kata, ` +
     `tambahkan 3-5 hashtag relevan di akhir. Jangan mengarang angka, harga, atau fakta spesifik yang tidak ada di judul; ` +
@@ -132,6 +170,7 @@ async function generateCaptionAndKeywords(topic) {
   for (let attempt = 1; ; attempt++) {
     const res = await request(`9Router (${NINE_ROUTER_BASE_URL}) - pastikan 9Router sudah jalan`, `${NINE_ROUTER_BASE_URL}/chat/completions`, {
       timeoutMs: 120_000,
+      retries: 1,
       method: "POST",
       headers: {
         Authorization: `Bearer ${NINE_ROUTER_API_KEY}`,
@@ -187,7 +226,14 @@ async function main() {
   const { topic, source } = await trendingTopic(usedTopics);
   console.log(`[1/4] Topik (${source}): ${topic}`);
 
-  const { caption, imageKeywords } = await generateCaptionAndKeywords(topic);
+  let generated;
+  try {
+    generated = await generateCaptionAndKeywords(topic);
+  } catch (err) {
+    console.warn(`Caption AI gagal (${err.message}), pakai caption cadangan.`);
+    generated = fallbackCaption(topic);
+  }
+  const { caption, imageKeywords } = generated;
   console.log(`[2/4] Image keywords: ${imageKeywords}`);
 
   const image = await findImage(imageKeywords, usedPhotoIds);
@@ -215,8 +261,9 @@ async function main() {
 }
 
 if (import.meta.main ?? process.argv[1]?.endsWith("post.js")) {
-  main().catch((err) => {
+  main().catch(async (err) => {
     console.error("Gagal posting:", err.message);
+    await notifyFailure(err.message);
     // process.exit() di Windows bisa crash (UV_HANDLE_CLOSING) saat socket fetch masih ditutup.
     process.exitCode = 1;
   });

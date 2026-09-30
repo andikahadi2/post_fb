@@ -2,7 +2,7 @@
 import { appendFileSync } from "node:fs";
 
 const scenario = JSON.parse(process.env.MOCK_SCENARIO);
-let aiCalls = 0;
+const calls = {};
 
 function routeOf(url) {
   if (url.includes("news.google.com")) return "rss";
@@ -10,6 +10,7 @@ function routeOf(url) {
   if (url.includes("/download")) return "download";
   if (url.includes("/photos/random")) return `unsplash:${new URL(url).searchParams.get("query")}`;
   if (url.includes("graph.facebook.com")) return "fb";
+  if (url.includes("api.telegram.org")) return "telegram";
   return "unknown";
 }
 
@@ -20,7 +21,7 @@ globalThis.fetch = async (input, opts = {}) => {
 
   let r = scenario[route] ?? (route.startsWith("unsplash:") ? scenario["unsplash:*"] : undefined);
   if (r === undefined) throw new Error(`mock: route belum didefinisikan: ${route}`);
-  if (route === "ai" && Array.isArray(r)) r = r[Math.min(aiCalls++, r.length - 1)];
+  if (Array.isArray(r)) r = r[Math.min((calls[route] = (calls[route] ?? -1) + 1), r.length - 1)];
 
   if (r.throw) {
     const err = new TypeError("fetch failed");
