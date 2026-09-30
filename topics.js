@@ -58,7 +58,7 @@ export async function trendingTopic(usedTopics = new Set()) {
       .slice(0, 10);
     if (!items.length) throw new Error("tidak ada berita baru");
     const { title, sourceName, sourceHost } = pick(items);
-    return { topic: title, source: "berita", credit: [sourceName, sourceHost].filter(Boolean).join(" · ") };
+    return { topic: title, source: "berita", credit: sourceHost.replace(/^www\./, "").toLowerCase() === sourceName.toLowerCase() ? sourceHost : [sourceName, sourceHost].filter(Boolean).join(" · ") };
   } catch (err) {
     console.warn(`RSS berita gagal (${err.message}), pakai topik statis.`);
     const fresh = TOPICS.filter((t) => !usedTopics.has(t));

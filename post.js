@@ -13,7 +13,7 @@ const {
   UNSPLASH_ACCESS_KEY,
   NINE_ROUTER_API_KEY,
   NINE_ROUTER_BASE_URL = "http://localhost:20128/v1",
-  NINE_ROUTER_MODEL = "gh/gpt-5.4",
+  NINE_ROUTER_MODEL = "gh/claude-haiku-4.5",
   FB_PAGE_ID,
   FB_PAGE_ACCESS_TOKEN,
   TELEGRAM_BOT_TOKEN,
