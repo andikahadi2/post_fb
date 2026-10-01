@@ -10,6 +10,7 @@ function routeOf(url) {
   if (url.includes("/download")) return "download";
   if (url.includes("/photos/random")) return `unsplash:${new URL(url).searchParams.get("query")}`;
   if (url.includes("/debug_token")) return "debug";
+  if (url.includes("fields=access_token")) return "pagetoken";
   if (url.includes("fields=")) return "metrics";
   if (url.includes("graph.facebook.com")) return "fb";
   if (url.includes("api.telegram.org")) return "telegram";

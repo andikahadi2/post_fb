@@ -67,6 +67,8 @@ async function notify(text) {
   }
 }
 
+let pageToken = FB_PAGE_ACCESS_TOKEN;
+
 // Slot hari ini (jam POST_HOUR) terlewat dan belum ada posting sesudahnya -> perlu dikejar.
 export function catchupDue(history, now = new Date(), hour = Number(POST_HOUR)) {
   const slot = new Date(now);
@@ -79,9 +81,22 @@ export function catchupDue(history, now = new Date(), hour = Number(POST_HOUR)) 
 async function checkFacebookToken() {
   try {
     const url = new URL(`${GRAPH_API}/debug_token`);
-    url.searchParams.set("input_token", FB_PAGE_ACCESS_TOKEN);
-    url.searchParams.set("access_token", FB_PAGE_ACCESS_TOKEN);
-    const data = (await (await request("Facebook token", url, { retries: 1 })).json()).data;
+    url.searchParams.set("input_token", pageToken);
+    url.searchParams.set("access_token", pageToken);
+    let data = (await (await request("Facebook token", url, { retries: 1 })).json()).data;
+    // Token pengguna tidak boleh dipakai posting ke Page (error #200 publish_actions): tukar ke token Page.
+    if (data?.type === "USER") {
+      const swap = new URL(`${GRAPH_API}/${FB_PAGE_ID}`);
+      swap.searchParams.set("fields", "access_token");
+      swap.searchParams.set("access_token", pageToken);
+      const page = await (await request("Facebook token Page", swap, { retries: 1 })).json();
+      if (!page.access_token) throw new Error(page.error?.message || "akun ini tidak punya akses ke Page");
+      console.warn("FB_PAGE_ACCESS_TOKEN berisi token pengguna; otomatis ditukar ke token Page. Perbaiki .env dengan npm run fb-token.");
+      pageToken = page.access_token;
+      url.searchParams.set("input_token", pageToken);
+      url.searchParams.set("access_token", pageToken);
+      data = (await (await request("Facebook token", url, { retries: 1 })).json()).data;
+    }
     if (data?.expires_at && data.expires_at * 1000 - Date.now() < 3 * 86_400_000) {
       const when = new Date(data.expires_at * 1000).toLocaleString("id-ID");
       console.warn(`Token Facebook kedaluwarsa ${when}.`);
@@ -301,7 +316,7 @@ async function generateCaptionAndKeywords(topic, format) {
 async function postToFacebook(imageUrl, caption) {
   const res = await request("Facebook", `${GRAPH_API}/${FB_PAGE_ID}/photos`, {
     method: "POST",
-    body: new URLSearchParams({ url: imageUrl, caption, access_token: FB_PAGE_ACCESS_TOKEN }),
+    body: new URLSearchParams({ url: imageUrl, caption, access_token: pageToken }),
   });
   const text = await res.text();
   let data;

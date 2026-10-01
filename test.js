@@ -274,6 +274,18 @@ try {
     assert.ok(r.routes.includes("fb"));
   });
 
+  check("e2e: FB_PAGE_ACCESS_TOKEN berisi token pengguna -> otomatis ditukar ke token Page sebelum posting", () => {
+    const r = run({
+      ...base,
+      "unsplash:electric SUV": { body: [photo("p6", "Gita")] },
+      debug: { body: { data: { type: "USER", is_valid: true, expires_at: 0 } } },
+      pagetoken: { body: { access_token: "PAGE_TOKEN" } },
+    });
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /ditukar ke token Page/);
+    assert.strictEqual(new URLSearchParams(r.calls.find((c) => c.route === "fb").body).get("access_token"), "PAGE_TOKEN");
+  });
+
   check("fallbackCaption: berisi topik & hashtag", () => {
     assert.match(fallbackCaption("Topik X").caption, /^Topik X\n[\s\S]*#otomotif/);
   });
@@ -291,7 +303,7 @@ try {
     assert.strictEqual(r.code, 1);
     assert.match(r.out, /Invalid OAuth access token/);
     assert.ok(!r.routes.includes("download"));
-    assert.strictEqual(history().length, 3);
+    assert.strictEqual(history().length, 4);
   });
 
   check("e2e: Facebook membalas HTML (bukan JSON) -> pesan error tetap terbaca", () => {
