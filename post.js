@@ -102,11 +102,68 @@ async function loadHistory() {
 }
 
 // ponytail: simpan 300 entri terakhir saja, cukup untuk ~5 bulan posting 2x sehari
-async function saveHistory(history, entry) {
-  const next = [...history, entry].slice(-HISTORY_LIMIT);
+async function writeHistory(list) {
   // Tulis ke file sementara lalu rename, supaya crash di tengah tidak merusak history.
-  await writeFile(`${HISTORY_FILE}.tmp`, JSON.stringify(next, null, 2));
+  await writeFile(`${HISTORY_FILE}.tmp`, JSON.stringify(list.slice(-HISTORY_LIMIT), null, 2));
   await rename(`${HISTORY_FILE}.tmp`, HISTORY_FILE);
+}
+
+const saveHistory = (history, entry) => writeHistory([...history, entry]);
+
+const METRICS_MIN_AGE_MS = 24 * 3_600_000;
+const METRICS_PER_RUN = 10;
+// Komentar dan share lebih berharga bagi algoritma Facebook daripada reaksi.
+export const engagementScore = ({ reactions, comments, shares }) => reactions + 3 * comments + 5 * shares;
+
+// Ambil reaksi/komentar/share posting yang sudah >24 jam, sekali saja per posting. Gagal tidak boleh menghalangi posting.
+async function refreshMetrics(history) {
+  const due = history
+    .filter((h) => h.postId && !h.metrics && Date.now() - new Date(h.date) >= METRICS_MIN_AGE_MS)
+    .slice(0, METRICS_PER_RUN);
+  if (!due.length) return history;
+
+  for (const entry of due) {
+    try {
+      const url = new URL(`${GRAPH_API}/${entry.postId}`);
+      url.searchParams.set("fields", "reactions.summary(true).limit(0),comments.summary(true).limit(0),shares");
+      url.searchParams.set("access_token", FB_PAGE_ACCESS_TOKEN);
+      const res = await request("Facebook metrik", url, { retries: 1 });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        entry.metrics = { error: data.error?.message || `HTTP ${res.status}` }; // jangan dicoba terus (mis. posting dihapus)
+        continue;
+      }
+      const m = {
+        reactions: data.reactions?.summary?.total_count ?? 0,
+        comments: data.comments?.summary?.total_count ?? 0,
+        shares: data.shares?.count ?? 0,
+      };
+      entry.metrics = { ...m, score: engagementScore(m), at: new Date().toISOString() };
+    } catch (err) {
+      console.warn(`Ambil metrik ${entry.postId} dilewati: ${err.message}`);
+    }
+  }
+  await writeHistory(history);
+  return history;
+}
+
+const formatName = (f) => f.split(":")[0];
+
+// Format yang belum cukup data (<2 posting berhasil diukur) dicoba dulu; sesudah itu 75% pilih rata-rata skor terbaik, 25% acak.
+export function pickFormat(history, rand = Math.random) {
+  const stats = new Map(CAPTION_FORMATS.map((f) => [f, { n: 0, sum: 0 }]));
+  for (const h of history) {
+    const f = CAPTION_FORMATS.find((x) => formatName(x) === h.format);
+    if (f && typeof h.metrics?.score === "number") {
+      stats.get(f).n++;
+      stats.get(f).sum += h.metrics.score;
+    }
+  }
+  const pick = (arr) => arr[Math.floor(rand() * arr.length)];
+  const untested = CAPTION_FORMATS.filter((f) => stats.get(f).n < 2);
+  if (untested.length) return pick(untested);
+  if (rand() < 0.25) return pick(CAPTION_FORMATS);
+  return CAPTION_FORMATS.reduce((best, f) => (stats.get(f).sum / stats.get(f).n > stats.get(best).sum / stats.get(best).n ? f : best));
 }
 
 async function findImage(imageKeywords, usedPhotoIds) {
@@ -156,11 +213,24 @@ async function trackUnsplashDownload(downloadLocation) {
 }
 
 const COPYWRITER_SYSTEM_PROMPT = `Kamu adalah copywriter media sosial profesional untuk halaman Facebook otomotif berbahasa Indonesia. ` +
-  `Tulisan kamu selalu mengikuti struktur:\n` +
-  `1. HOOK - kalimat pembuka yang bikin orang berhenti scroll (pertanyaan, fakta mengejutkan, atau pernyataan berani).\n` +
-  `2. ISI - 1-2 insight/tips konkret yang bernilai, ditulis singkat dan mudah dicerna, gaya ngobrol tapi tetap kredibel.\n` +
-  `3. CTA - ajakan ringan di akhir yang mendorong interaksi (komentar, share, atau tag teman), bukan CTA jualan yang maksa.\n` +
-  `Hindari clickbait kosong, klaim berlebihan, dan bahasa yang kaku/formal. Gunakan emoji secukupnya (maks 2-3) kalau pas.`;
+  `Tujuanmu: caption yang bikin orang berhenti scroll dan ingin membalas, bukan sekadar membaca.\n` +
+  `Aturan:\n` +
+  `- Baris pertama adalah HOOK yang kuat (maks 12 kata, tanpa basa-basi): angka/fakta tajam dari judul, kontras, atau pertanyaan yang memancing opini.\n` +
+  `- Kalimat pendek, satu ide per baris, gaya ngobrol orang Indonesia (boleh "kamu", "gak", "nih"), tetap kredibel.\n` +
+  `- Akhiri dengan SATU pertanyaan spesifik yang mudah dijawab dalam 1 kata atau 1 kalimat, dan punya dua kubu yang jelas ` +
+  `(misal "Tim A atau Tim B?"). Pertanyaannya harus muncul alami dari topik.\n` +
+  `- DILARANG meminta like, komentar, share, atau tag teman secara eksplisit, dan jangan pakai "klik/tulis di komentar". ` +
+  `Facebook menurunkan jangkauan posting yang seperti itu.\n` +
+  `- Hindari clickbait kosong, klaim berlebihan, dan bahasa kaku/formal. Emoji maks 2.`;
+
+// Diputar acak tiap posting supaya feed tidak monoton; tiap format memicu jenis interaksi berbeda.
+export const CAPTION_FORMATS = [
+  "OPINI TAJAM: ambil satu sikap yang berani tapi masuk akal soal topik ini, lalu tantang pembaca setuju atau tidak.",
+  "PILIH SALAH SATU: bingkai topik sebagai dua pilihan yang saling bersaing (A vs B), singkat, lalu tanya mereka pilih yang mana.",
+  "TAHUKAH KAMU: satu fakta/konteks umum yang membuat orang bilang 'oh iya ya', tanpa mengarang angka di luar judul.",
+  "TIPS CEPAT: 3 poin pendek yang langsung berguna buat pemilik mobil dan berhubungan dengan topik, lalu tanya pengalaman mereka.",
+  "CERITA MINI: 2-3 kalimat situasi relatable pemilik kendaraan yang terhubung ke topik, lalu tanya 'pernah ngalamin?'.",
+];
 
 // Model kadang membungkus JSON dengan teks/markdown, atau mengirim keyword sebagai array.
 export function parseAiReply(raw) {
@@ -179,13 +249,15 @@ export function parseAiReply(raw) {
 // Dipakai kalau AI mati/rusak supaya jadwal posting tidak bolong.
 export function fallbackCaption(topic) {
   return {
-    caption: `${topic}\n\nMenurut kamu gimana? Tulis pendapatmu di komentar 👇\n\n#otomotif #mobil #beritaotomotif`,
+    caption: `${topic}\n\nMenurut kamu, ini kabar baik atau justru bikin ragu?\n\n#otomotif #mobil #beritaotomotif`,
     imageKeywords: FALLBACK_IMAGE_QUERY,
   };
 }
 
-async function generateCaptionAndKeywords(topic) {
-  const prompt = `Buatkan caption Facebook berdasarkan topik/judul berita otomotif ini: "${topic}". Maksimal 120 kata, ` +
+async function generateCaptionAndKeywords(topic, format) {
+  const prompt = `Buatkan caption Facebook berdasarkan topik/judul berita otomotif ini: "${topic}".\n` +
+    `Format yang dipakai kali ini -> ${format}\n` +
+    `Maksimal 100 kata, ` +
     `tambahkan 3-5 hashtag relevan di akhir. Jangan mengarang angka, harga, atau fakta spesifik yang tidak ada di judul; ` +
     `kalau perlu, fokus ke opini, konteks umum, atau tips yang berkaitan.\n\n` +
     `Lalu buat juga 2-4 keyword pencarian gambar dalam Bahasa Inggris yang paling relevan dengan isi caption itu, ` +
@@ -248,21 +320,26 @@ async function main() {
 
   if (DRY_RUN) console.log("=== DRY RUN: tidak akan posting ke Facebook ===");
 
-  const history = await loadHistory();
+  let history = await loadHistory();
   if (CATCHUP && !catchupDue(history)) {
     console.log("Catch-up: tidak ada jadwal yang terlewat, lewati.");
     return;
   }
-  if (!DRY_RUN) await checkFacebookToken();
+  if (!DRY_RUN) {
+    await checkFacebookToken();
+    history = await refreshMetrics(history);
+  }
   const usedTopics = new Set(history.map((h) => h.topic));
   const usedPhotoIds = new Set(history.map((h) => h.photoId));
 
   const { topic, source, credit } = await trendingTopic(usedTopics);
   console.log(`[1/4] Topik (${source}): ${topic}`);
 
+  const format = pickFormat(history);
+  console.log(`Format caption: ${formatName(format)}`);
   let generated;
   try {
-    generated = await generateCaptionAndKeywords(topic);
+    generated = await generateCaptionAndKeywords(topic, format);
   } catch (err) {
     console.warn(`Caption AI gagal (${err.message}), pakai caption cadangan.`);
     generated = fallbackCaption(topic);
@@ -289,6 +366,7 @@ async function main() {
   await saveHistory(history, {
     date: new Date().toISOString(),
     topic,
+    format: formatName(format),
     photoId: image.id,
     postId,
   });

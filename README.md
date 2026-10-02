@@ -36,6 +36,10 @@ Setiap posting, aplikasi mengecek masa berlaku token dan mengirim peringatan Tel
 - Caption memuat nama media + domain sumber berita (link Google News terenkripsi & panjang, jadi tidak dipakai); keyword gambar dicoba satu per satu ke Unsplash.
 - Kalau posting gagal, notifikasi Telegram dikirim (jika dikonfigurasi). Facebook tidak diulang otomatis agar tidak terjadi posting ganda.
 
+## Belajar dari hasil posting
+Tiap posting memakai salah satu dari 5 format caption (`CAPTION_FORMATS` di `post.js`). Setiap run, posting yang sudah >24 jam diukur sekali lewat Graph API (reaksi, komentar, share) dan skornya disimpan di `history.json` (`metrics.score` = reaksi + 3×komentar + 5×share).
+Format dipilih berdasarkan data: format yang belum punya 2 posting terukur dicoba dulu, sesudah itu 75% memilih rata-rata skor tertinggi dan 25% acak. Dry-run tidak mengukur dan tidak mengubah history.
+
 ## Test
 `npm test` (unit parser + end-to-end dengan fetch palsu).
 

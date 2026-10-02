@@ -1,12 +1,12 @@
 import assert from "node:assert";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseHeadlines, parseItems } from "./topics.js";
 import { nextRun, parseLog } from "./dashboard.js";
-import { catchupDue, fallbackCaption, parseAiReply } from "./post.js";
+import { CAPTION_FORMATS, catchupDue, engagementScore, fallbackCaption, parseAiReply, pickFormat } from "./post.js";
 
 let passed = 0;
 function check(name, fn) {
@@ -82,6 +82,38 @@ check("nextRun: jadwal 19:00 hari ini, lompat ke besok setelah lewat", () => {
   assert.strictEqual(new Date(nextRun(new Date(2026, 0, 5, 7, 0))).getHours(), 19);
   const d = new Date(nextRun(new Date(2026, 0, 5, 20, 0)));
   assert.deepStrictEqual([d.getDate(), d.getHours()], [6, 19]);
+});
+
+// --- Unit: pemilihan format berdasarkan hasil ---
+
+const nameOf = (f) => f.split(":")[0];
+const scored = (fmtIdx, score) => ({ format: nameOf(CAPTION_FORMATS[fmtIdx]), metrics: { score } });
+// 2 sampel per format, format ke-2 paling tinggi; kecuali yang dikecualikan.
+const historyWith = (skip = []) =>
+  CAPTION_FORMATS.flatMap((_, i) => (skip.includes(i) ? [] : [scored(i, i === 2 ? 50 : 5), scored(i, i === 2 ? 70 : 5)]));
+
+check("engagementScore: komentar x3, share x5", () => {
+  assert.strictEqual(engagementScore({ reactions: 10, comments: 2, shares: 1 }), 21);
+});
+
+check("pickFormat: belum ada data -> acak dari semua format", () => {
+  assert.strictEqual(pickFormat([], () => 0), CAPTION_FORMATS[0]);
+  assert.strictEqual(pickFormat([], () => 0.99), CAPTION_FORMATS.at(-1));
+});
+
+check("pickFormat: format yang belum cukup data dicoba dulu", () => {
+  assert.strictEqual(pickFormat(historyWith([4]), () => 0.99), CAPTION_FORMATS[4]);
+});
+
+check("pickFormat: data lengkap -> 75% pilih rata-rata terbaik, 25% acak", () => {
+  const h = historyWith();
+  assert.strictEqual(pickFormat(h, () => 0.9), CAPTION_FORMATS[2]);
+  assert.strictEqual(pickFormat(h, () => 0.1), CAPTION_FORMATS[0]);
+});
+
+check("pickFormat: entri tanpa skor / gagal diukur diabaikan", () => {
+  const h = [{ format: nameOf(CAPTION_FORMATS[0]) }, { format: nameOf(CAPTION_FORMATS[0]), metrics: { error: "x" } }];
+  assert.strictEqual(pickFormat(h, () => 0), CAPTION_FORMATS[0]);
 });
 
 // --- End-to-end: jalankan post.js sungguhan dengan fetch palsu ---
@@ -197,7 +229,8 @@ try {
     const r = run({ ...base, ai: aiReply("tidak ada json") }, { args: ["--dry"] });
     assert.strictEqual(r.code, 0, r.out);
     assert.match(r.out, /tidak valid setelah 2x coba.*caption cadangan/s);
-    assert.match(r.out, /Menurut kamu gimana/);
+    assert.match(r.out, /Menurut kamu, ini kabar baik/);
+    assert.doesNotMatch(r.out, /di komentar/);
   });
 
   check("e2e: 9Router mati -> dicoba ulang, lalu caption cadangan dengan pesan 9Router", () => {
@@ -265,6 +298,33 @@ try {
     const r = run({ ...base, "unsplash:electric SUV": { body: [photo("p3", "Cici")] }, fb: { status: 502, body: "<html>Bad Gateway</html>" } });
     assert.strictEqual(r.code, 1);
     assert.match(r.out, /Facebook error 502: <html>Bad Gateway/);
+  });
+
+  check("e2e: metrik posting >24 jam diambil sekali, error ditandai, posting baru mencatat format", () => {
+    const old = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    writeFileSync(HISTORY, JSON.stringify([
+      { date: old, topic: "Lama1", format: "OPINI TAJAM", photoId: "x1", postId: "1_1" },
+      { date: new Date().toISOString(), topic: "Baru", photoId: "x2", postId: "1_2" },
+      { date: old, topic: "Lama3", photoId: "x3", postId: "1_3" },
+    ]));
+    const r = run({
+      ...base,
+      metrics: [
+        { body: { reactions: { summary: { total_count: 10 } }, comments: { summary: { total_count: 2 } }, shares: { count: 1 } } },
+        { status: 400, body: { error: { message: "Post deleted" } } },
+      ],
+    });
+    assert.strictEqual(r.code, 0, r.out);
+    assert.strictEqual(r.routes.filter((x) => x === "metrics").length, 2);
+    const h = history();
+    assert.strictEqual(h[0].metrics.score, 21);
+    assert.strictEqual(h[1].metrics, undefined);
+    assert.strictEqual(h[2].metrics.error, "Post deleted");
+    assert.ok(CAPTION_FORMATS.some((f) => f.startsWith(h[3].format)));
+
+    const again = run({ ...base, "unsplash:electric SUV": { body: [photo("p9", "Dedi")] } });
+    assert.strictEqual(again.code, 0, again.out);
+    assert.ok(!again.routes.includes("metrics"), "metrik tidak boleh diambil dua kali");
   });
 } finally {
   rmSync(dir, { recursive: true, force: true });
