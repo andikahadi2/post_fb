@@ -141,7 +141,7 @@ async function refreshMetrics(history) {
     try {
       const url = new URL(`${GRAPH_API}/${entry.postId}`);
       url.searchParams.set("fields", "reactions.summary(true).limit(0),comments.summary(true).limit(0),shares");
-      url.searchParams.set("access_token", FB_PAGE_ACCESS_TOKEN);
+      url.searchParams.set("access_token", pageToken);
       const res = await request("Facebook metrik", url, { retries: 1 });
       const data = await res.json();
       if (!res.ok || data.error) {
